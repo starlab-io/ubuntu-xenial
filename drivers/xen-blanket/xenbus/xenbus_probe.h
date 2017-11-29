@@ -54,35 +54,35 @@ enum xenstore_init {
 	XS_LOCAL,
 };
 
-extern const struct attribute_group *xenbus_dev_groups[];
+extern const struct attribute_group *xenbus_dev_groups_hvm[];
 
-extern int xenbus_match(struct device *_dev, struct device_driver *_drv);
-extern int xenbus_dev_probe(struct device *_dev);
-extern int xenbus_dev_remove(struct device *_dev);
-extern int xenbus_register_driver_common(struct xenbus_driver *drv,
+extern int xenbus_match_hvm(struct device *_dev, struct device_driver *_drv);
+extern int xenbus_dev_probe_hvm(struct device *_dev);
+extern int xenbus_dev_remove_hvm(struct device *_dev);
+extern int xenbus_register_driver_common_hvm(struct xenbus_driver *drv,
 					 struct xen_bus_type *bus,
 					 struct module *owner,
 					 const char *mod_name);
-extern int xenbus_probe_node(struct xen_bus_type *bus,
+extern int xenbus_probe_node_hvm(struct xen_bus_type *bus,
 			     const char *type,
 			     const char *nodename);
-extern int xenbus_probe_devices(struct xen_bus_type *bus);
+extern int xenbus_probe_devices_hvm(struct xen_bus_type *bus);
 
-extern void xenbus_dev_changed(const char *node, struct xen_bus_type *bus);
+extern void xenbus_dev_changed_hvm(const char *node, struct xen_bus_type *bus);
 
-extern void xenbus_dev_shutdown(struct device *_dev);
+extern void xenbus_dev_shutdown_hvm(struct device *_dev);
 
-extern int xenbus_dev_suspend(struct device *dev);
-extern int xenbus_dev_resume(struct device *dev);
-extern int xenbus_dev_cancel(struct device *dev);
+extern int xenbus_dev_suspend_hvm(struct device *dev);
+extern int xenbus_dev_resume_hvm(struct device *dev);
+extern int xenbus_dev_cancel_hvm(struct device *dev);
 
-extern void xenbus_otherend_changed(struct xenbus_watch *watch,
+extern void xenbus_otherend_changed_hvm(struct xenbus_watch *watch,
 				    const char **vec, unsigned int len,
 				    int ignore_on_shutdown);
 
-extern int xenbus_read_otherend_details(struct xenbus_device *xendev,
+extern int xenbus_read_otherend_details_hvm(struct xenbus_device *xendev,
 					char *id_node, char *path_node);
 
-void xenbus_ring_ops_init(void);
+void xenbus_ring_ops_init_hvm(void);
 
 #endif

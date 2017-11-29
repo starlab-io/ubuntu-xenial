@@ -73,18 +73,18 @@ struct evtchn_ops {
 	void (*resume)(void);
 };
 
-extern const struct evtchn_ops *evtchn_ops;
+extern const struct evtchn_ops *evtchn_ops_hvm;
 
-extern int **evtchn_to_irq;
-int get_evtchn_to_irq(unsigned int evtchn);
+extern int **evtchn_to_irq_hvm;
+int get_evtchn_to_irq_hvm(unsigned int evtchn);
 
 struct irq_info *info_for_irq(unsigned irq);
 unsigned cpu_from_irq(unsigned irq);
-unsigned cpu_from_evtchn(unsigned int evtchn);
+unsigned cpu_from_evtchn_hvm(unsigned int evtchn);
 
 static inline unsigned xen_evtchn_max_channels(void)
 {
-	return evtchn_ops->max_channels();
+	return evtchn_ops_hvm->max_channels();
 }
 
 /*
@@ -93,59 +93,59 @@ static inline unsigned xen_evtchn_max_channels(void)
  */
 static inline int xen_evtchn_port_setup(struct irq_info *info)
 {
-	if (evtchn_ops->setup)
-		return evtchn_ops->setup(info);
+	if (evtchn_ops_hvm->setup)
+		return evtchn_ops_hvm->setup(info);
 	return 0;
 }
 
 static inline void xen_evtchn_port_bind_to_cpu(struct irq_info *info,
 					       unsigned cpu)
 {
-	evtchn_ops->bind_to_cpu(info, cpu);
+	evtchn_ops_hvm->bind_to_cpu(info, cpu);
 }
 
 static inline void clear_evtchn(unsigned port)
 {
-	evtchn_ops->clear_pending(port);
+	evtchn_ops_hvm->clear_pending(port);
 }
 
 static inline void set_evtchn(unsigned port)
 {
-	evtchn_ops->set_pending(port);
+	evtchn_ops_hvm->set_pending(port);
 }
 
 static inline bool test_evtchn(unsigned port)
 {
-	return evtchn_ops->is_pending(port);
+	return evtchn_ops_hvm->is_pending(port);
 }
 
 static inline bool test_and_set_mask(unsigned port)
 {
-	return evtchn_ops->test_and_set_mask(port);
+	return evtchn_ops_hvm->test_and_set_mask(port);
 }
 
 static inline void mask_evtchn(unsigned port)
 {
-	return evtchn_ops->mask(port);
+	return evtchn_ops_hvm->mask(port);
 }
 
 static inline void unmask_evtchn(unsigned port)
 {
-	return evtchn_ops->unmask(port);
+	return evtchn_ops_hvm->unmask(port);
 }
 
 static inline void xen_evtchn_handle_events(unsigned cpu)
 {
-	return evtchn_ops->handle_events(cpu);
+	return evtchn_ops_hvm->handle_events(cpu);
 }
 
 static inline void xen_evtchn_resume(void)
 {
-	if (evtchn_ops->resume)
-		evtchn_ops->resume();
+	if (evtchn_ops_hvm->resume)
+		evtchn_ops_hvm->resume();
 }
 
-void xen_evtchn_2l_init(void);
-int xen_evtchn_fifo_init(void);
+void xen_evtchn_2l_init_hvm(void);
+int xen_evtchn_fifo_init_hvm(void);
 
 #endif /* #ifndef __EVENTS_INTERNAL_H__ */

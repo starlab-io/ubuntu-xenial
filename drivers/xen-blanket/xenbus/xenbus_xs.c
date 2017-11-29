@@ -47,7 +47,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <asm/xen/hypervisor.h>
-#include <xen/xenbus.h>
+#include "xenbus.h"
 #include <xen/xen.h>
 #include "xenbus_comms.h"
 #include "xenbus_probe.h"
@@ -230,7 +230,7 @@ static void transaction_resume(void)
 	mutex_unlock(&xs_state.transaction_mutex);
 }
 
-void *xenbus_dev_request_and_reply(struct xsd_sockmsg *msg)
+void *xenbus_dev_request_and_reply_hvm(struct xsd_sockmsg *msg)
 {
 	void *ret;
 	struct xsd_sockmsg req_msg = *msg;
@@ -241,7 +241,7 @@ void *xenbus_dev_request_and_reply(struct xsd_sockmsg *msg)
 
 	mutex_lock(&xs_state.request_mutex);
 
-	err = xb_write(msg, sizeof(*msg) + msg->len);
+	err = xb_write_hvm(msg, sizeof(*msg) + msg->len);
 	if (err) {
 		msg->type = XS_ERROR;
 		ret = ERR_PTR(err);
@@ -257,7 +257,7 @@ void *xenbus_dev_request_and_reply(struct xsd_sockmsg *msg)
 
 	return ret;
 }
-EXPORT_SYMBOL(xenbus_dev_request_and_reply);
+EXPORT_SYMBOL(xenbus_dev_request_and_reply_hvm);
 
 /* Send message to xs, get kmalloc'ed reply.  ERR_PTR() on error. */
 static void *xs_talkv(struct xenbus_transaction t,
@@ -280,14 +280,14 @@ static void *xs_talkv(struct xenbus_transaction t,
 
 	mutex_lock(&xs_state.request_mutex);
 
-	err = xb_write(&msg, sizeof(msg));
+	err = xb_write_hvm(&msg, sizeof(msg));
 	if (err) {
 		mutex_unlock(&xs_state.request_mutex);
 		return ERR_PTR(err);
 	}
 
 	for (i = 0; i < num_vecs; i++) {
-		err = xb_write(iovec[i].iov_base, iovec[i].iov_len);
+		err = xb_write_hvm(iovec[i].iov_base, iovec[i].iov_len);
 		if (err) {
 			mutex_unlock(&xs_state.request_mutex);
 			return ERR_PTR(err);
@@ -384,7 +384,7 @@ static char **split(char *strings, unsigned int len, unsigned int *num)
 	return ret;
 }
 
-char **xenbus_directory(struct xenbus_transaction t,
+char **xenbus_directory_hvm(struct xenbus_transaction t,
 			const char *dir, const char *node, unsigned int *num)
 {
 	char *strings, *path;
@@ -401,28 +401,28 @@ char **xenbus_directory(struct xenbus_transaction t,
 
 	return split(strings, len, num);
 }
-EXPORT_SYMBOL_GPL(xenbus_directory);
+EXPORT_SYMBOL_GPL(xenbus_directory_hvm);
 
 /* Check if a path exists. Return 1 if it does. */
-int xenbus_exists(struct xenbus_transaction t,
+int xenbus_exists_hvm(struct xenbus_transaction t,
 		  const char *dir, const char *node)
 {
 	char **d;
 	int dir_n;
 
-	d = xenbus_directory(t, dir, node, &dir_n);
+	d = xenbus_directory_hvm(t, dir, node, &dir_n);
 	if (IS_ERR(d))
 		return 0;
 	kfree(d);
 	return 1;
 }
-EXPORT_SYMBOL_GPL(xenbus_exists);
+EXPORT_SYMBOL_GPL(xenbus_exists_hvm);
 
 /* Get the value of a single file.
  * Returns a kmalloced value: call free() on it after use.
  * len indicates length in bytes.
  */
-void *xenbus_read(struct xenbus_transaction t,
+void *xenbus_read_hvm(struct xenbus_transaction t,
 		  const char *dir, const char *node, unsigned int *len)
 {
 	char *path;
@@ -436,12 +436,12 @@ void *xenbus_read(struct xenbus_transaction t,
 	kfree(path);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(xenbus_read);
+EXPORT_SYMBOL_GPL(xenbus_read_hvm);
 
 /* Write the value of a single file.
  * Returns -err on failure.
  */
-int xenbus_write(struct xenbus_transaction t,
+int xenbus_write_hvm(struct xenbus_transaction t,
 		 const char *dir, const char *node, const char *string)
 {
 	const char *path;
@@ -461,10 +461,10 @@ int xenbus_write(struct xenbus_transaction t,
 	kfree(path);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(xenbus_write);
+EXPORT_SYMBOL_GPL(xenbus_write_hvm);
 
 /* Create a new directory. */
-int xenbus_mkdir(struct xenbus_transaction t,
+int xenbus_mkdir_hvm(struct xenbus_transaction t,
 		 const char *dir, const char *node)
 {
 	char *path;
@@ -478,10 +478,10 @@ int xenbus_mkdir(struct xenbus_transaction t,
 	kfree(path);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(xenbus_mkdir);
+EXPORT_SYMBOL_GPL(xenbus_mkdir_hvm);
 
 /* Destroy a file or directory (directories must be empty). */
-int xenbus_rm(struct xenbus_transaction t, const char *dir, const char *node)
+int xenbus_rm_hvm(struct xenbus_transaction t, const char *dir, const char *node)
 {
 	char *path;
 	int ret;
@@ -494,12 +494,12 @@ int xenbus_rm(struct xenbus_transaction t, const char *dir, const char *node)
 	kfree(path);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(xenbus_rm);
+EXPORT_SYMBOL_GPL(xenbus_rm_hvm);
 
 /* Start a transaction: changes by others will not be seen during this
  * transaction, and changes will not be visible to others until end.
  */
-int xenbus_transaction_start(struct xenbus_transaction *t)
+int xenbus_transaction_start_hvm(struct xenbus_transaction *t)
 {
 	char *id_str;
 
@@ -515,12 +515,12 @@ int xenbus_transaction_start(struct xenbus_transaction *t)
 	kfree(id_str);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(xenbus_transaction_start);
+EXPORT_SYMBOL_GPL(xenbus_transaction_start_hvm);
 
 /* End a transaction.
  * If abandon is true, transaction is discarded instead of committed.
  */
-int xenbus_transaction_end(struct xenbus_transaction t, int abort)
+int xenbus_transaction_end_hvm(struct xenbus_transaction t, int abort)
 {
 	char abortstr[2];
 	int err;
@@ -536,17 +536,17 @@ int xenbus_transaction_end(struct xenbus_transaction t, int abort)
 
 	return err;
 }
-EXPORT_SYMBOL_GPL(xenbus_transaction_end);
+EXPORT_SYMBOL_GPL(xenbus_transaction_end_hvm);
 
 /* Single read and scanf: returns -errno or num scanned. */
-int xenbus_scanf(struct xenbus_transaction t,
+int xenbus_scanf_hvm(struct xenbus_transaction t,
 		 const char *dir, const char *node, const char *fmt, ...)
 {
 	va_list ap;
 	int ret;
 	char *val;
 
-	val = xenbus_read(t, dir, node, NULL);
+	val = xenbus_read_hvm(t, dir, node, NULL);
 	if (IS_ERR(val))
 		return PTR_ERR(val);
 
@@ -559,10 +559,10 @@ int xenbus_scanf(struct xenbus_transaction t,
 		return -ERANGE;
 	return ret;
 }
-EXPORT_SYMBOL_GPL(xenbus_scanf);
+EXPORT_SYMBOL_GPL(xenbus_scanf_hvm);
 
 /* Single printf and write: returns -errno or 0. */
-int xenbus_printf(struct xenbus_transaction t,
+int xenbus_printf_hvm(struct xenbus_transaction t,
 		  const char *dir, const char *node, const char *fmt, ...)
 {
 	va_list ap;
@@ -576,16 +576,16 @@ int xenbus_printf(struct xenbus_transaction t,
 	if (!buf)
 		return -ENOMEM;
 
-	ret = xenbus_write(t, dir, node, buf);
+	ret = xenbus_write_hvm(t, dir, node, buf);
 
 	kfree(buf);
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(xenbus_printf);
+EXPORT_SYMBOL_GPL(xenbus_printf_hvm);
 
 /* Takes tuples of names, scanf-style args, and void **, NULL terminated. */
-int xenbus_gather(struct xenbus_transaction t, const char *dir, ...)
+int xenbus_gather_hvm(struct xenbus_transaction t, const char *dir, ...)
 {
 	va_list ap;
 	const char *name;
@@ -597,7 +597,7 @@ int xenbus_gather(struct xenbus_transaction t, const char *dir, ...)
 		void *result = va_arg(ap, void *);
 		char *p;
 
-		p = xenbus_read(t, dir, name, NULL);
+		p = xenbus_read_hvm(t, dir, name, NULL);
 		if (IS_ERR(p)) {
 			ret = PTR_ERR(p);
 			break;
@@ -612,7 +612,7 @@ int xenbus_gather(struct xenbus_transaction t, const char *dir, ...)
 	va_end(ap);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(xenbus_gather);
+EXPORT_SYMBOL_GPL(xenbus_gather_hvm);
 
 static int xs_watch(const char *path, const char *token)
 {
@@ -682,7 +682,7 @@ static void xs_reset_watches(void)
 	if (xen_strict_xenbus_quirk())
 		return;
 
-	err = xenbus_scanf(XBT_NIL, "control",
+	err = xenbus_scanf_hvm(XBT_NIL, "control",
 			"platform-feature-xs_reset_watches", "%d", &supported);
 	if (err != 1 || !supported)
 		return;
@@ -693,7 +693,7 @@ static void xs_reset_watches(void)
 }
 
 /* Register callback to watch this node. */
-int register_xenbus_watch(struct xenbus_watch *watch)
+int register_xenbus_watch_hvm(struct xenbus_watch *watch)
 {
 	/* Pointer in ascii is the token. */
 	char token[sizeof(watch) * 2 + 1];
@@ -720,9 +720,9 @@ int register_xenbus_watch(struct xenbus_watch *watch)
 
 	return err;
 }
-EXPORT_SYMBOL_GPL(register_xenbus_watch);
+EXPORT_SYMBOL_GPL(register_xenbus_watch_hvm);
 
-void unregister_xenbus_watch(struct xenbus_watch *watch)
+void unregister_xenbus_watch_hvm(struct xenbus_watch *watch)
 {
 	struct xs_stored_msg *msg, *tmp;
 	char token[sizeof(watch) * 2 + 1];
@@ -762,9 +762,9 @@ void unregister_xenbus_watch(struct xenbus_watch *watch)
 	if (current->pid != xenwatch_pid)
 		mutex_unlock(&xenwatch_mutex);
 }
-EXPORT_SYMBOL_GPL(unregister_xenbus_watch);
+EXPORT_SYMBOL_GPL(unregister_xenbus_watch_hvm);
 
-void xs_suspend(void)
+void xs_suspend_hvm(void)
 {
 	transaction_suspend();
 	down_write(&xs_state.watch_mutex);
@@ -772,12 +772,12 @@ void xs_suspend(void)
 	mutex_lock(&xs_state.response_mutex);
 }
 
-void xs_resume(void)
+void xs_resume_hvm(void)
 {
 	struct xenbus_watch *watch;
 	char token[sizeof(watch) * 2 + 1];
 
-	xb_init_comms();
+	xb_init_comms_hvm();
 
 	mutex_unlock(&xs_state.response_mutex);
 	mutex_unlock(&xs_state.request_mutex);
@@ -792,7 +792,7 @@ void xs_resume(void)
 	up_write(&xs_state.watch_mutex);
 }
 
-void xs_suspend_cancel(void)
+void xs_suspend_cancel_hvm(void)
 {
 	mutex_unlock(&xs_state.response_mutex);
 	mutex_unlock(&xs_state.request_mutex);
@@ -847,11 +847,11 @@ static int process_msg(void)
 	 * A partial read across s/r leaves us out of sync with xenstored.
 	 */
 	for (;;) {
-		err = xb_wait_for_data_to_read();
+		err = xb_wait_for_data_to_read_hvm();
 		if (err)
 			return err;
 		mutex_lock(&xs_state.response_mutex);
-		if (xb_data_to_read())
+		if (xb_data_to_read_hvm())
 			break;
 		/* We raced with save/restore: pending data 'disappeared'. */
 		mutex_unlock(&xs_state.response_mutex);
@@ -864,7 +864,7 @@ static int process_msg(void)
 		goto out;
 	}
 
-	err = xb_read(&msg->hdr, sizeof(msg->hdr));
+	err = xb_read_hvm(&msg->hdr, sizeof(msg->hdr));
 	if (err) {
 		kfree(msg);
 		goto out;
@@ -883,7 +883,7 @@ static int process_msg(void)
 		goto out;
 	}
 
-	err = xb_read(body, msg->hdr.len);
+	err = xb_read_hvm(body, msg->hdr.len);
 	if (err) {
 		kfree(body);
 		kfree(msg);
@@ -941,7 +941,7 @@ static int xenbus_thread(void *unused)
 	return 0;
 }
 
-int xs_init(void)
+int xs_init_hvm(void)
 {
 	int err;
 	struct task_struct *task;
@@ -958,16 +958,16 @@ int xs_init(void)
 	init_waitqueue_head(&xs_state.transaction_wq);
 
 	/* Initialize the shared memory rings to talk to xenstored */
-	err = xb_init_comms();
+	err = xb_init_comms_hvm();
 	if (err)
 		return err;
 
-	task = kthread_run(xenwatch_thread, NULL, "xenwatch");
+	task = kthread_run(xenwatch_thread, NULL, "xenblanket_xenwatch");
 	if (IS_ERR(task))
 		return PTR_ERR(task);
 	xenwatch_pid = task->pid;
 
-	task = kthread_run(xenbus_thread, NULL, "xenbus");
+	task = kthread_run(xenbus_thread, NULL, "xenblanet_xenbus");
 	if (IS_ERR(task))
 		return PTR_ERR(task);
 

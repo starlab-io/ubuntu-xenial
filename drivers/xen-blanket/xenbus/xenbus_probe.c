@@ -55,8 +55,8 @@
 #include <asm/xen/hypervisor.h>
 
 #include <xen/xen.h>
-#include <xen/xenbus.h>
-#include <xen/events.h>
+#include "xenbus.h"
+#include "../events.h"
 #include <xen/xen-ops.h>
 #include <xen/page.h>
 
@@ -65,19 +65,39 @@
 #include "xenbus_comms.h"
 #include "xenbus_probe.h"
 
+#include "../xenblanket.h"
+#include "../xenblanket_hypercall.h"
 
-int xen_store_evtchn;
-EXPORT_SYMBOL_GPL(xen_store_evtchn);
+int xen_store_evtchn_hvm;
+EXPORT_SYMBOL_GPL(xen_store_evtchn_hvm);
 
-struct xenstore_domain_interface *xen_store_interface;
-EXPORT_SYMBOL_GPL(xen_store_interface);
+struct xenstore_domain_interface *xen_store_interface_hvm;
+EXPORT_SYMBOL_GPL(xen_store_interface_hvm);
 
-enum xenstore_init xen_store_domain_type;
-EXPORT_SYMBOL_GPL(xen_store_domain_type);
+enum xenstore_init xen_store_domain_type_hvm;
+EXPORT_SYMBOL_GPL(xen_store_domain_type_hvm);
 
 static unsigned long xen_store_gfn;
 
 static BLOCKING_NOTIFIER_HEAD(xenstore_chain);
+
+static inline int hvm_get_parameter_hvm(int idx, uint64_t *value)
+{
+        struct xen_hvm_param xhv;
+        int r;
+
+        xhv.domid = DOMID_SELF;
+        xhv.index = idx;
+        r = HYPERVISOR_blanket_hvm_op(HVMOP_get_param, &xhv);
+        if (r < 0) {
+                printk(KERN_ERR "Cannot get hvm parameter %d: %d!\n",
+                        idx, r);
+                return r;
+        }
+        *value = xhv.value;
+        return r;
+}
+
 
 /* If something in array of ids matches this device, return it. */
 static const struct xenbus_device_id *
@@ -90,7 +110,7 @@ match_device(const struct xenbus_device_id *arr, struct xenbus_device *dev)
 	return NULL;
 }
 
-int xenbus_match(struct device *_dev, struct device_driver *_drv)
+int xenbus_match_hvm(struct device *_dev, struct device_driver *_drv)
 {
 	struct xenbus_driver *drv = to_xenbus_driver(_drv);
 
@@ -99,7 +119,7 @@ int xenbus_match(struct device *_dev, struct device_driver *_drv)
 
 	return match_device(drv->ids, to_xenbus_device(_dev)) != NULL;
 }
-EXPORT_SYMBOL_GPL(xenbus_match);
+EXPORT_SYMBOL_GPL(xenbus_match_hvm);
 
 
 static void free_otherend_details(struct xenbus_device *dev)
@@ -112,7 +132,7 @@ static void free_otherend_details(struct xenbus_device *dev)
 static void free_otherend_watch(struct xenbus_device *dev)
 {
 	if (dev->otherend_watch.node) {
-		unregister_xenbus_watch(&dev->otherend_watch);
+		unregister_xenbus_watch_hvm(&dev->otherend_watch);
 		kfree(dev->otherend_watch.node);
 		dev->otherend_watch.node = NULL;
 	}
@@ -136,28 +156,28 @@ static int watch_otherend(struct xenbus_device *dev)
 	struct xen_bus_type *bus =
 		container_of(dev->dev.bus, struct xen_bus_type, bus);
 
-	return xenbus_watch_pathfmt(dev, &dev->otherend_watch,
+	return xenbus_watch_pathfmt_hvm(dev, &dev->otherend_watch,
 				    bus->otherend_changed,
 				    "%s/%s", dev->otherend, "state");
 }
 
 
-int xenbus_read_otherend_details(struct xenbus_device *xendev,
+int xenbus_read_otherend_details_hvm(struct xenbus_device *xendev,
 				 char *id_node, char *path_node)
 {
-	int err = xenbus_gather(XBT_NIL, xendev->nodename,
+	int err = xenbus_gather_hvm(XBT_NIL, xendev->nodename,
 				id_node, "%i", &xendev->otherend_id,
 				path_node, NULL, &xendev->otherend,
 				NULL);
 	if (err) {
-		xenbus_dev_fatal(xendev, err,
+		xenbus_dev_fatal_hvm(xendev, err,
 				 "reading other end details from %s",
 				 xendev->nodename);
 		return err;
 	}
 	if (strlen(xendev->otherend) == 0 ||
-	    !xenbus_exists(XBT_NIL, xendev->otherend, "")) {
-		xenbus_dev_fatal(xendev, -ENOENT,
+	    !xenbus_exists_hvm(XBT_NIL, xendev->otherend, "")) {
+		xenbus_dev_fatal_hvm(xendev, -ENOENT,
 				 "unable to read other end from %s.  "
 				 "missing or inaccessible.",
 				 xendev->nodename);
@@ -167,9 +187,9 @@ int xenbus_read_otherend_details(struct xenbus_device *xendev,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(xenbus_read_otherend_details);
+EXPORT_SYMBOL_GPL(xenbus_read_otherend_details_hvm);
 
-void xenbus_otherend_changed(struct xenbus_watch *watch,
+void xenbus_otherend_changed_hvm(struct xenbus_watch *watch,
 			     const char **vec, unsigned int len,
 			     int ignore_on_shutdown)
 {
@@ -188,10 +208,10 @@ void xenbus_otherend_changed(struct xenbus_watch *watch,
 		return;
 	}
 
-	state = xenbus_read_driver_state(dev->otherend);
+	state = xenbus_read_driver_state_hvm(dev->otherend);
 
 	dev_dbg(&dev->dev, "state is %d, (%s), %s, %s\n",
-		state, xenbus_strstate(state), dev->otherend_watch.node,
+		state, xenbus_strstate_hvm(state), dev->otherend_watch.node,
 		vec[XS_WATCH_PATH]);
 
 	/*
@@ -200,16 +220,16 @@ void xenbus_otherend_changed(struct xenbus_watch *watch,
 	 */
 	if (system_state > SYSTEM_RUNNING) {
 		if (ignore_on_shutdown && (state == XenbusStateClosing))
-			xenbus_frontend_closed(dev);
+			xenbus_frontend_closed_hvm(dev);
 		return;
 	}
 
 	if (drv->otherend_changed)
 		drv->otherend_changed(dev, state);
 }
-EXPORT_SYMBOL_GPL(xenbus_otherend_changed);
+EXPORT_SYMBOL_GPL(xenbus_otherend_changed_hvm);
 
-int xenbus_dev_probe(struct device *_dev)
+int xenbus_dev_probe_hvm(struct device *_dev)
 {
 	struct xenbus_device *dev = to_xenbus_device(_dev);
 	struct xenbus_driver *drv = to_xenbus_driver(_dev->driver);
@@ -249,13 +269,13 @@ int xenbus_dev_probe(struct device *_dev)
 
 	return 0;
 fail:
-	xenbus_dev_error(dev, err, "xenbus_dev_probe on %s", dev->nodename);
-	xenbus_switch_state(dev, XenbusStateClosed);
+	xenbus_dev_error_hvm(dev, err, "xenbus_dev_probe on %s", dev->nodename);
+	xenbus_switch_state_hvm(dev, XenbusStateClosed);
 	return err;
 }
-EXPORT_SYMBOL_GPL(xenbus_dev_probe);
+EXPORT_SYMBOL_GPL(xenbus_dev_probe_hvm);
 
-int xenbus_dev_remove(struct device *_dev)
+int xenbus_dev_remove_hvm(struct device *_dev)
 {
 	struct xenbus_device *dev = to_xenbus_device(_dev);
 	struct xenbus_driver *drv = to_xenbus_driver(_dev->driver);
@@ -269,12 +289,12 @@ int xenbus_dev_remove(struct device *_dev)
 
 	free_otherend_details(dev);
 
-	xenbus_switch_state(dev, XenbusStateClosed);
+	xenbus_switch_state_hvm(dev, XenbusStateClosed);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(xenbus_dev_remove);
+EXPORT_SYMBOL_GPL(xenbus_dev_remove_hvm);
 
-void xenbus_dev_shutdown(struct device *_dev)
+void xenbus_dev_shutdown_hvm(struct device *_dev)
 {
 	struct xenbus_device *dev = to_xenbus_device(_dev);
 	unsigned long timeout = 5*HZ;
@@ -284,10 +304,10 @@ void xenbus_dev_shutdown(struct device *_dev)
 	get_device(&dev->dev);
 	if (dev->state != XenbusStateConnected) {
 		pr_info("%s: %s: %s != Connected, skipping\n",
-			__func__, dev->nodename, xenbus_strstate(dev->state));
+			__func__, dev->nodename, xenbus_strstate_hvm(dev->state));
 		goto out;
 	}
-	xenbus_switch_state(dev, XenbusStateClosing);
+	xenbus_switch_state_hvm(dev, XenbusStateClosing);
 	timeout = wait_for_completion_timeout(&dev->down, timeout);
 	if (!timeout)
 		pr_info("%s: %s timeout closing device\n",
@@ -295,9 +315,9 @@ void xenbus_dev_shutdown(struct device *_dev)
  out:
 	put_device(&dev->dev);
 }
-EXPORT_SYMBOL_GPL(xenbus_dev_shutdown);
+EXPORT_SYMBOL_GPL(xenbus_dev_shutdown_hvm);
 
-int xenbus_register_driver_common(struct xenbus_driver *drv,
+int xenbus_register_driver_common_hvm(struct xenbus_driver *drv,
 				  struct xen_bus_type *bus,
 				  struct module *owner, const char *mod_name)
 {
@@ -308,13 +328,13 @@ int xenbus_register_driver_common(struct xenbus_driver *drv,
 
 	return driver_register(&drv->driver);
 }
-EXPORT_SYMBOL_GPL(xenbus_register_driver_common);
+EXPORT_SYMBOL_GPL(xenbus_register_driver_common_hvm);
 
-void xenbus_unregister_driver(struct xenbus_driver *drv)
+void xenbus_unregister_driver_hvm(struct xenbus_driver *drv)
 {
 	driver_unregister(&drv->driver);
 }
-EXPORT_SYMBOL_GPL(xenbus_unregister_driver);
+EXPORT_SYMBOL_GPL(xenbus_unregister_driver_hvm);
 
 struct xb_find_info {
 	struct xenbus_device *dev;
@@ -334,7 +354,7 @@ static int cmp_dev(struct device *dev, void *data)
 	return 0;
 }
 
-static struct xenbus_device *xenbus_device_find(const char *nodename,
+static struct xenbus_device *xenbus_device_find_hvm(const char *nodename,
 						struct bus_type *bus)
 {
 	struct xb_find_info info = { .dev = NULL, .nodename = nodename };
@@ -367,11 +387,11 @@ static int cleanup_dev(struct device *dev, void *data)
 static void xenbus_cleanup_devices(const char *path, struct bus_type *bus)
 {
 	struct xb_find_info info = { .nodename = path };
-
 	do {
 		info.dev = NULL;
 		bus_for_each_dev(bus, NULL, &info, cleanup_dev);
 		if (info.dev) {
+			printk("XENBLANKET-DOM0: unregister dev.\n");
 			device_unregister(&info.dev->dev);
 			put_device(&info.dev->dev);
 		}
@@ -417,13 +437,13 @@ static const struct attribute_group xenbus_dev_group = {
 	.attrs = xenbus_dev_attrs,
 };
 
-const struct attribute_group *xenbus_dev_groups[] = {
+const struct attribute_group *xenbus_dev_groups_hvm[] = {
 	&xenbus_dev_group,
 	NULL,
 };
-EXPORT_SYMBOL_GPL(xenbus_dev_groups);
+EXPORT_SYMBOL_GPL(xenbus_dev_groups_hvm);
 
-int xenbus_probe_node(struct xen_bus_type *bus,
+int xenbus_probe_node_hvm(struct xen_bus_type *bus,
 		      const char *type,
 		      const char *nodename)
 {
@@ -433,7 +453,8 @@ int xenbus_probe_node(struct xen_bus_type *bus,
 	size_t stringlen;
 	char *tmpstring;
 
-	enum xenbus_state state = xenbus_read_driver_state(nodename);
+	enum xenbus_state state = xenbus_read_driver_state_hvm(nodename);
+
 
 	if (state != XenbusStateInitialising) {
 		/* Device is not new, so ignore it.  This can happen if a
@@ -478,7 +499,7 @@ fail:
 	kfree(xendev);
 	return err;
 }
-EXPORT_SYMBOL_GPL(xenbus_probe_node);
+EXPORT_SYMBOL_GPL(xenbus_probe_node_hvm);
 
 static int xenbus_probe_device_type(struct xen_bus_type *bus, const char *type)
 {
@@ -487,7 +508,7 @@ static int xenbus_probe_device_type(struct xen_bus_type *bus, const char *type)
 	unsigned int dir_n = 0;
 	int i;
 
-	dir = xenbus_directory(XBT_NIL, bus->root, type, &dir_n);
+	dir = xenbus_directory_hvm(XBT_NIL, bus->root, type, &dir_n);
 	if (IS_ERR(dir))
 		return PTR_ERR(dir);
 
@@ -496,20 +517,20 @@ static int xenbus_probe_device_type(struct xen_bus_type *bus, const char *type)
 		if (err)
 			break;
 	}
-
 	kfree(dir);
 	return err;
 }
 
-int xenbus_probe_devices(struct xen_bus_type *bus)
+int xenbus_probe_devices_hvm(struct xen_bus_type *bus)
 {
 	int err = 0;
 	char **dir;
 	unsigned int i, dir_n;
 
-	dir = xenbus_directory(XBT_NIL, bus->root, "", &dir_n);
-	if (IS_ERR(dir))
+	dir = xenbus_directory_hvm(XBT_NIL, bus->root, "", &dir_n);
+	if (IS_ERR(dir)) {
 		return PTR_ERR(dir);
+	}
 
 	for (i = 0; i < dir_n; i++) {
 		err = xenbus_probe_device_type(bus, dir[i]);
@@ -520,7 +541,7 @@ int xenbus_probe_devices(struct xen_bus_type *bus)
 	kfree(dir);
 	return err;
 }
-EXPORT_SYMBOL_GPL(xenbus_probe_devices);
+EXPORT_SYMBOL_GPL(xenbus_probe_devices_hvm);
 
 static unsigned int char_count(const char *str, char c)
 {
@@ -545,7 +566,7 @@ static int strsep_len(const char *str, char c, unsigned int len)
 	return (len == 0) ? i : -ERANGE;
 }
 
-void xenbus_dev_changed(const char *node, struct xen_bus_type *bus)
+void xenbus_dev_changed_hvm(const char *node, struct xen_bus_type *bus)
 {
 	int exists, rootlen;
 	struct xenbus_device *dev;
@@ -555,7 +576,7 @@ void xenbus_dev_changed(const char *node, struct xen_bus_type *bus)
 	if (char_count(node, '/') < 2)
 		return;
 
-	exists = xenbus_exists(XBT_NIL, node, "");
+	exists = xenbus_exists_hvm(XBT_NIL, node, "");
 	if (!exists) {
 		xenbus_cleanup_devices(node, &bus->bus);
 		return;
@@ -573,17 +594,17 @@ void xenbus_dev_changed(const char *node, struct xen_bus_type *bus)
 	if (!root)
 		return;
 
-	dev = xenbus_device_find(root, &bus->bus);
+	dev = xenbus_device_find_hvm(root, &bus->bus);
 	if (!dev)
-		xenbus_probe_node(bus, type, root);
+		xenbus_probe_node_hvm(bus, type, root);
 	else
 		put_device(&dev->dev);
 
 	kfree(root);
 }
-EXPORT_SYMBOL_GPL(xenbus_dev_changed);
+EXPORT_SYMBOL_GPL(xenbus_dev_changed_hvm);
 
-int xenbus_dev_suspend(struct device *dev)
+int xenbus_dev_suspend_hvm(struct device *dev)
 {
 	int err = 0;
 	struct xenbus_driver *drv;
@@ -601,9 +622,9 @@ int xenbus_dev_suspend(struct device *dev)
 		pr_warn("suspend %s failed: %i\n", dev_name(dev), err);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(xenbus_dev_suspend);
+EXPORT_SYMBOL_GPL(xenbus_dev_suspend_hvm);
 
-int xenbus_dev_resume(struct device *dev)
+int xenbus_dev_resume_hvm(struct device *dev)
 {
 	int err;
 	struct xenbus_driver *drv;
@@ -641,61 +662,47 @@ int xenbus_dev_resume(struct device *dev)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(xenbus_dev_resume);
+EXPORT_SYMBOL_GPL(xenbus_dev_resume_hvm);
 
-int xenbus_dev_cancel(struct device *dev)
+int xenbus_dev_cancel_hvm(struct device *dev)
 {
 	/* Do nothing */
 	DPRINTK("cancel");
 	return 0;
 }
-EXPORT_SYMBOL_GPL(xenbus_dev_cancel);
+EXPORT_SYMBOL_GPL(xenbus_dev_cancel_hvm);
 
 /* A flag to determine if xenstored is 'ready' (i.e. has started) */
-int xenstored_ready;
+int xenstored_ready_hvm;
 
 
-int register_xenstore_notifier(struct notifier_block *nb)
+int register_xenstore_notifier_hvm(struct notifier_block *nb)
 {
 	int ret = 0;
 
-	if (xenstored_ready > 0)
+	if (xenstored_ready_hvm > 0)
 		ret = nb->notifier_call(nb, 0, NULL);
 	else
 		blocking_notifier_chain_register(&xenstore_chain, nb);
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(register_xenstore_notifier);
+EXPORT_SYMBOL_GPL(register_xenstore_notifier_hvm);
 
-void unregister_xenstore_notifier(struct notifier_block *nb)
+void unregister_xenstore_notifier_hvm(struct notifier_block *nb)
 {
 	blocking_notifier_chain_unregister(&xenstore_chain, nb);
 }
-EXPORT_SYMBOL_GPL(unregister_xenstore_notifier);
+EXPORT_SYMBOL_GPL(unregister_xenstore_notifier_hvm);
 
-void xenbus_probe(struct work_struct *unused)
+void xenbus_probe_hvm(struct work_struct *unused)
 {
-	xenstored_ready = 1;
+	xenstored_ready_hvm = 1;
 
 	/* Notify others that xenstore is up */
 	blocking_notifier_call_chain(&xenstore_chain, 0, NULL);
 }
-EXPORT_SYMBOL_GPL(xenbus_probe);
-
-static int __init xenbus_probe_initcall(void)
-{
-	if (!xen_domain())
-		return -ENODEV;
-
-	if (xen_initial_domain() || xen_hvm_domain())
-		return 0;
-
-	xenbus_probe(NULL);
-	return 0;
-}
-
-device_initcall(xenbus_probe_initcall);
+EXPORT_SYMBOL_GPL(xenbus_probe_hvm);
 
 /* Set up event channel for xenstored which is run as a local process
  * (this is normally used only in dom0)
@@ -723,7 +730,7 @@ static int __init xenstored_local_init(void)
 		goto out_err;
 
 	BUG_ON(err);
-	xen_store_evtchn = xen_start_info->store_evtchn =
+	xen_store_evtchn_hvm = xen_start_info->store_evtchn =
 		alloc_unbound.port;
 
 	return 0;
@@ -744,12 +751,12 @@ static int xenbus_resume_cb(struct notifier_block *nb,
 
 		err = hvm_get_parameter(HVM_PARAM_STORE_EVTCHN, &v);
 		if (!err && v)
-			xen_store_evtchn = v;
+			xen_store_evtchn_hvm = v;
 		else
 			pr_warn("Cannot update xenstore event channel: %d\n",
 				err);
 	} else
-		xen_store_evtchn = xen_start_info->store_evtchn;
+		xen_store_evtchn_hvm = xen_start_info->store_evtchn;
 
 	return err;
 }
@@ -758,7 +765,7 @@ static struct notifier_block xenbus_resume_nb = {
 	.notifier_call = xenbus_resume_cb,
 };
 
-static int __init xenbus_init(void)
+int __init xenbus_init_hvm(void)
 {
 	int err = 0;
 	uint64_t v = 0;
@@ -767,7 +774,7 @@ static int __init xenbus_init(void)
 	if (!xen_domain())
 		return -ENODEV;
 
-	xenbus_ring_ops_init();
+	xenbus_ring_ops_init_hvm();
 
 	if (xen_pv_domain())
 		xen_store_domain_type = XS_PV;
@@ -778,30 +785,30 @@ static int __init xenbus_init(void)
 	if (xen_pv_domain() && !xen_start_info->store_evtchn)
 		xen_store_domain_type = XS_LOCAL;
 	if (xen_pv_domain() && xen_start_info->store_evtchn)
-		xenstored_ready = 1;
+		xenstored_ready_hvm = 1;
 
 	switch (xen_store_domain_type) {
 	case XS_LOCAL:
 		err = xenstored_local_init();
 		if (err)
 			goto out_error;
-		xen_store_interface = gfn_to_virt(xen_store_gfn);
+		xen_store_interface_hvm = gfn_to_virt(xen_store_gfn);
 		break;
 	case XS_PV:
-		xen_store_evtchn = xen_start_info->store_evtchn;
+		xen_store_evtchn_hvm = xen_start_info->store_evtchn;
 		xen_store_gfn = xen_start_info->store_mfn;
-		xen_store_interface = gfn_to_virt(xen_store_gfn);
+		xen_store_interface_hvm = gfn_to_virt(xen_store_gfn);
 		break;
 	case XS_HVM:
 		err = hvm_get_parameter(HVM_PARAM_STORE_EVTCHN, &v);
 		if (err)
 			goto out_error;
-		xen_store_evtchn = (int)v;
+		xen_store_evtchn_hvm = (int)v;
 		err = hvm_get_parameter(HVM_PARAM_STORE_PFN, &v);
 		if (err)
 			goto out_error;
 		xen_store_gfn = (unsigned long)v;
-		xen_store_interface =
+		xen_store_interface_hvm =
 			xen_remap(xen_store_gfn << XEN_PAGE_SHIFT,
 				  XEN_PAGE_SIZE);
 		break;
@@ -810,8 +817,21 @@ static int __init xenbus_init(void)
 		break;
 	}
 
+	if (xenblanket_platform) {
+		err = hvm_get_parameter_hvm(HVM_PARAM_STORE_EVTCHN, &v);
+		if (err)
+            goto out_error;
+		xen_store_evtchn_hvm = (int)v;
+		err = hvm_get_parameter_hvm(HVM_PARAM_STORE_PFN, &v);
+		if (err)
+            goto out_error;
+		xen_store_interface_hvm = ioremap(xen_store_gfn << PAGE_SHIFT, PAGE_SIZE);
+		printk("XENBLANKET-DOM0: xenstore evtchn %x xenbus %p.\n",
+		    xen_store_evtchn_hvm, xen_store_interface_hvm);
+    }
+
 	/* Initialize the interface to xenstore. */
-	err = xs_init();
+	err = xs_init_hvm();
 	if (err) {
 		pr_warn("Error initializing xenstore comms: %i\n", err);
 		goto out_error;
@@ -826,13 +846,13 @@ static int __init xenbus_init(void)
 	 * Create xenfs mountpoint in /proc for compatibility with
 	 * utilities that expect to find "xenbus" under "/proc/xen".
 	 */
-	proc_create_mount_point("xen");
+	proc_create_mount_point("xen-blanket");
 #endif
 
 out_error:
 	return err;
 }
 
-postcore_initcall(xenbus_init);
+//postcore_initcall(xenbus_init_hvm);
 
 MODULE_LICENSE("GPL");

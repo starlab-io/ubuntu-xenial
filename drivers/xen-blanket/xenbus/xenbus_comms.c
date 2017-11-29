@@ -36,22 +36,22 @@
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 #include <linux/err.h>
-#include <xen/xenbus.h>
+#include "xenbus.h"
 #include <asm/xen/hypervisor.h>
-#include <xen/events.h>
+#include "../events.h"
 #include <xen/page.h>
 #include "xenbus_comms.h"
 
 static int xenbus_irq;
 
-static DECLARE_WORK(probe_work, xenbus_probe);
+static DECLARE_WORK(probe_work, xenbus_probe_hvm);
 
 static DECLARE_WAIT_QUEUE_HEAD(xb_waitq);
 
 static irqreturn_t wake_waiting(int irq, void *unused)
 {
-	if (unlikely(xenstored_ready == 0)) {
-		xenstored_ready = 1;
+	if (unlikely(xenstored_ready_hvm == 0)) {
+		xenstored_ready_hvm = 1;
 		schedule_work(&probe_work);
 	}
 
@@ -91,9 +91,9 @@ static const void *get_input_chunk(XENSTORE_RING_IDX cons,
  *
  * Returns 0 on success, error otherwise.
  */
-int xb_write(const void *data, unsigned len)
+int xb_write_hvm(const void *data, unsigned len)
 {
-	struct xenstore_domain_interface *intf = xen_store_interface;
+	struct xenstore_domain_interface *intf = xen_store_interface_hvm;
 	XENSTORE_RING_IDX cons, prod;
 	int rc;
 
@@ -134,26 +134,26 @@ int xb_write(const void *data, unsigned len)
 		intf->req_prod += avail;
 
 		/* Implies mb(): other side will see the updated producer. */
-		notify_remote_via_evtchn(xen_store_evtchn);
+		notify_remote_via_evtchn_hvm(xen_store_evtchn_hvm);
 	}
 
 	return 0;
 }
 
-int xb_data_to_read(void)
+int xb_data_to_read_hvm(void)
 {
-	struct xenstore_domain_interface *intf = xen_store_interface;
+	struct xenstore_domain_interface *intf = xen_store_interface_hvm;
 	return (intf->rsp_cons != intf->rsp_prod);
 }
 
-int xb_wait_for_data_to_read(void)
+int xb_wait_for_data_to_read_hvm(void)
 {
-	return wait_event_interruptible(xb_waitq, xb_data_to_read());
+	return wait_event_interruptible(xb_waitq, xb_data_to_read_hvm());
 }
 
-int xb_read(void *data, unsigned len)
+int xb_read_hvm(void *data, unsigned len)
 {
-	struct xenstore_domain_interface *intf = xen_store_interface;
+	struct xenstore_domain_interface *intf = xen_store_interface_hvm;
 	XENSTORE_RING_IDX cons, prod;
 	int rc;
 
@@ -161,7 +161,7 @@ int xb_read(void *data, unsigned len)
 		unsigned int avail;
 		const char *src;
 
-		rc = xb_wait_for_data_to_read();
+		rc = xb_wait_for_data_to_read_hvm();
 		if (rc < 0)
 			return rc;
 
@@ -193,7 +193,7 @@ int xb_read(void *data, unsigned len)
 		pr_debug("Finished read of %i bytes (%i to go)\n", avail, len);
 
 		/* Implies mb(): other side will see the updated consumer. */
-		notify_remote_via_evtchn(xen_store_evtchn);
+		notify_remote_via_evtchn_hvm(xen_store_evtchn_hvm);
 	}
 
 	return 0;
@@ -202,9 +202,9 @@ int xb_read(void *data, unsigned len)
 /**
  * xb_init_comms - Set up interrupt handler off store event channel.
  */
-int xb_init_comms(void)
+int xb_init_comms_hvm(void)
 {
-	struct xenstore_domain_interface *intf = xen_store_interface;
+	struct xenstore_domain_interface *intf = xen_store_interface_hvm;
 
 	if (intf->req_prod != intf->req_cons)
 		pr_err("request ring is not quiescent (%08x:%08x)!\n",
@@ -218,26 +218,25 @@ int xb_init_comms(void)
 			intf->rsp_cons = intf->rsp_prod;
 	}
 
-	if (xenbus_irq) {
-		/* Already have an irq; assume we're resuming */
-		rebind_evtchn_irq(xen_store_evtchn, xenbus_irq);
-	} else {
-		int err;
-		err = bind_evtchn_to_irqhandler(xen_store_evtchn, wake_waiting,
-						0, "xenbus", &xb_waitq);
-		if (err < 0) {
-			pr_err("request irq failed %i\n", err);
-			return err;
-		}
+	/* don't need to consider resume, for dom0's use */
+	int err;
+	err = bind_evtchn_to_irqhandler_hvm(xen_store_evtchn_hvm, wake_waiting,
+					0, "xenbus_xenblanket", &xb_waitq);
+	if (err <= 0) {
+		printk(KERN_ERR "XENBUS request irq failed %i\n", err);
+		return err;
+ 	}
+ 
+	printk("XENBLANKET-DOM0: xenbus irq %d.\n", xenbus_irq);
 
-		xenbus_irq = err;
-	}
+	xenbus_irq = err;
+
 
 	return 0;
 }
 
-void xb_deinit_comms(void)
+void xb_deinit_comms_hvm(void)
 {
-	unbind_from_irqhandler(xenbus_irq, &xb_waitq);
+	unbind_from_irqhandler_hvm(xenbus_irq, &xb_waitq);
 	xenbus_irq = 0;
 }

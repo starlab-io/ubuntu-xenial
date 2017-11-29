@@ -33,18 +33,18 @@
 
 #include <linux/fs.h>
 
-int xs_init(void);
-int xb_init_comms(void);
-void xb_deinit_comms(void);
+int xs_init_hvm(void);
+int xb_init_comms_hvm(void);
+void xb_deinit_comms_hvm(void);
 
 /* Low level routines. */
-int xb_write(const void *data, unsigned len);
-int xb_read(void *data, unsigned len);
-int xb_data_to_read(void);
-int xb_wait_for_data_to_read(void);
-int xs_input_avail(void);
-extern struct xenstore_domain_interface *xen_store_interface;
-extern int xen_store_evtchn;
+int xb_write_hvm(const void *data, unsigned len);
+int xb_read_hvm(void *data, unsigned len);
+int xb_data_to_read_hvm(void);
+int xb_wait_for_data_to_read_hvm(void);
+int xs_input_avail_hvm(void);
+extern struct xenstore_domain_interface *xen_store_interface_hvm;
+extern int xen_store_evtchn_hvm;
 extern enum xenstore_init xen_store_domain_type;
 
 extern const struct file_operations xen_xenbus_fops;

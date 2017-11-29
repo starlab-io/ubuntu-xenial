@@ -27,14 +27,28 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 
+#include <asm/xen/page.h>
+#include <linux/delay.h>
 #include <xen/platform_pci.h>
-#include <xen/grant_table.h>
-#include <xen/xenbus.h>
-#include <xen/events.h>
+#include "features.h"
+#include "grant_table.h"
+#include "xenbus/xenbus.h"
+#include "events.h"
+#include <xen/interface/memory.h>
 #include <xen/hvm.h>
 #include <xen/xen-ops.h>
+#include <asm/setup.h>
+#include <asm/xen/hypercall.h>
+#include "xenblanket.h"
+#include "xenblanket_hypercall.h"
+
+int __init xenbus_init_hvm(void);
 
 #define DRV_NAME    "xen-platform-pci"
+
+int xen_setup_shutdown_event_hvm(void);
+void xen_unplug_emulated_devices_hvm(void);
+int __init xenbus_probe_frontend_init_hvm(void);
 
 MODULE_AUTHOR("ssmith@xensource.com and stefano.stabellini@eu.citrix.com");
 MODULE_DESCRIPTION("Xen platform PCI device");
@@ -45,7 +59,75 @@ static unsigned long platform_mmio_alloc;
 static unsigned long platform_mmiolen;
 static uint64_t callback_via;
 
-static unsigned long alloc_xen_mmio(unsigned long len)
+static unsigned long alloc_xen_mmio_hvm(unsigned long len);
+
+static bool __init xen_blanket_platform(void)
+{
+    long rc = 0;
+    uint32_t base;
+    struct blanket_get_cpuid cpuid;
+    char signature[13] = {0};
+    printk("XENBLANKET-DOM0: detecting nested hvm environment.\n");
+    for (base = 0x40000000; base < 0x40010000; base += 100) {
+        rc = HYPERVISOR_blanket_get_cpuid(base, &cpuid);
+        if(rc)
+            break;
+        *(uint32_t *)(signature + 0) = cpuid.ebx;
+        *(uint32_t *)(signature + 4) = cpuid.ecx;
+        *(uint32_t *)(signature + 8) = cpuid.edx;
+        signature[12] = 0;
+        if (!strcmp("XenVMMXenVMM", signature) && ((cpuid.eax - base) >= 2)) {
+            printk("XENBLANKET-DOM0: nested hvm environment detected.\n");
+            return true;
+        }
+    }
+    printk("XENBLANKET-DOM0: fail to detect nested hvm environment, cpuid %s.\n", signature);
+    return false;
+}
+
+static void xenblanket_get_shared_info(void)
+{
+    struct xen_add_to_physmap xatp;
+    static struct shared_info *shared_info_page = 0;
+
+    shared_info_page = page_address(alloc_pages(GFP_ATOMIC, 0));
+    printk("XENBLAKENT-DOM0: debug xenblanket_get_shared_info: %p %lx %lx.\n",
+	shared_info_page, __pa(shared_info_page) >> PAGE_SHIFT,
+	pfn_to_mfn(__pa(shared_info_page) >> PAGE_SHIFT)); 
+    memset(shared_info_page, 0, PAGE_SIZE);
+    xatp.domid = DOMID_SELF;
+    xatp.idx = 0;
+    xatp.space = XENMAPSPACE_shared_info;
+    xatp.gpfn = pfn_to_mfn(__pa(shared_info_page) >> PAGE_SHIFT);
+    if (HYPERVISOR_blanket_memory_op(XENMEM_add_to_physmap, &xatp))
+        BUG();
+
+    HYPERVISOR_shared_info_hvm = shared_info_page;
+
+    printk("XENBLANKET-DOM0: debug shared info page wc - %lx %lx %lx.\n",
+	HYPERVISOR_shared_info_hvm->wc.version,
+	HYPERVISOR_shared_info_hvm->wc.sec,
+	HYPERVISOR_shared_info_hvm->wc.nsec);
+
+    printk("XENBLANKET-DOM0: shared info page - %p.\n", HYPERVISOR_shared_info_hvm);
+}
+
+static void xenblanket_init(void)
+{
+	if(xen_blanket_platform())
+		xenblanket_platform = 1;
+	else
+		xenblanket_platform = 0;
+	if(xenblanket_platform)
+	{
+		printk("XENBLANKET-DOM0: initialize xenblanket hypercalls.\n");
+		HYPERVISOR_blanket_init_nested_hypercall();		
+		xenblanket_get_shared_info();	
+	}
+}
+
+
+static unsigned long alloc_xen_mmio_hvm(unsigned long len)
 {
 	unsigned long addr;
 
@@ -77,7 +159,7 @@ static uint64_t get_callback_via(struct pci_dev *pdev)
 
 static irqreturn_t do_hvm_evtchn_intr(int irq, void *dev_id)
 {
-	xen_hvm_evtchn_do_upcall();
+	xen_hvm_evtchn_do_upcall_hvm();
 	return IRQ_HANDLED;
 }
 
@@ -91,9 +173,9 @@ static int xen_allocate_irq(struct pci_dev *pdev)
 static int platform_pci_resume(struct pci_dev *pdev)
 {
 	int err;
-	if (xen_have_vector_callback)
+	if (xen_have_vector_callback_hvm)
 		return 0;
-	err = xen_set_callback_via(callback_via);
+	err = xen_set_callback_via_hvm(callback_via);
 	if (err) {
 		dev_err(&pdev->dev, "platform_pci_resume failure!\n");
 		return err;
@@ -112,6 +194,8 @@ static int platform_pci_init(struct pci_dev *pdev,
 
 	if (!xen_domain())
 		return -ENODEV;
+
+        printk("XENBLANKET-DOM0: platform_pci_init().\n");
 
 	i = pci_enable_device(pdev);
 	if (i)
@@ -139,14 +223,26 @@ static int platform_pci_init(struct pci_dev *pdev,
 	platform_mmio = mmio_addr;
 	platform_mmiolen = mmio_len;
 
-	if (!xen_have_vector_callback) {
+        xenblanket_init();
+        if(xenblanket_platform)
+                xen_unplug_emulated_devices_hvm();
+
+	xen_setup_features_hvm();
+
+	//L2 Xen cannot recognize callback vector
+        //if (xen_feature_hvm(XENFEAT_hvm_callback_vector))
+        //        xen_have_vector_callback_hvm = 1;	
+
+	xen_init_IRQ_hvm();
+
+	if (!xen_have_vector_callback_hvm) {
 		ret = xen_allocate_irq(pdev);
 		if (ret) {
 			dev_warn(&pdev->dev, "request_irq failed err=%d\n", ret);
 			goto out;
 		}
 		callback_via = get_callback_via(pdev);
-		ret = xen_set_callback_via(callback_via);
+		ret = xen_set_callback_via_hvm(callback_via);
 		if (ret) {
 			dev_warn(&pdev->dev, "Unable to set the evtchn callback "
 					 "err=%d\n", ret);
@@ -154,18 +250,29 @@ static int platform_pci_init(struct pci_dev *pdev,
 		}
 	}
 
-	max_nr_gframes = gnttab_max_grant_frames();
-	grant_frames = alloc_xen_mmio(PAGE_SIZE * max_nr_gframes);
-	ret = gnttab_setup_auto_xlat_frames(grant_frames);
+	max_nr_gframes = gnttab_max_grant_frames_hvm();
+	grant_frames = alloc_xen_mmio_hvm(PAGE_SIZE * max_nr_gframes);
+	ret = gnttab_setup_auto_xlat_frames_hvm(grant_frames);
 	if (ret)
 		goto out;
-	ret = gnttab_init();
+	ret = gnttab_init_hvm();
 	if (ret)
 		goto grant_out;
-	xenbus_probe(NULL);
+    xenbus_init_hvm();
+
+    xenbus_probe_frontend_init_hvm();
+
+	xen_setup_shutdown_event_hvm();
+
+    xenbus_probe_hvm(NULL);
+
+    xenblanket_platform_initialized = 1;
+
+    xlblk_init_hvm();
+
 	return 0;
 grant_out:
-	gnttab_free_auto_xlat_frames();
+	gnttab_free_auto_xlat_frames_hvm();
 out:
 	pci_release_region(pdev, 0);
 mem_out:
@@ -192,9 +299,9 @@ static struct pci_driver platform_driver = {
 #endif
 };
 
-static int __init platform_pci_module_init(void)
+static int __init platform_pci_module_init_hvm(void)
 {
 	return pci_register_driver(&platform_driver);
 }
 
-module_init(platform_pci_module_init);
+module_init(platform_pci_module_init_hvm);

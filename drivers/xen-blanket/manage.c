@@ -15,12 +15,13 @@
 #include <linux/export.h>
 
 #include <xen/xen.h>
-#include <xen/xenbus.h>
-#include <xen/grant_table.h>
-#include <xen/events.h>
+#include "xenbus/xenbus.h"
+#include "grant_table.h"
+#include "events.h"
+
 #include <xen/hvc-console.h>
 #include <xen/page.h>
-#include <xen/xen-ops.h>
+#include "xen-ops.h"
 
 #include <asm/xen/hypercall.h>
 #include <asm/xen/hypervisor.h>
@@ -45,17 +46,17 @@ struct suspend_info {
 
 static RAW_NOTIFIER_HEAD(xen_resume_notifier);
 
-void xen_resume_notifier_register(struct notifier_block *nb)
+void xen_resume_notifier_register_hvm(struct notifier_block *nb)
 {
 	raw_notifier_chain_register(&xen_resume_notifier, nb);
 }
-EXPORT_SYMBOL_GPL(xen_resume_notifier_register);
+EXPORT_SYMBOL_GPL(xen_resume_notifier_register_hvm);
 
-void xen_resume_notifier_unregister(struct notifier_block *nb)
+void xen_resume_notifier_unregister_hvm(struct notifier_block *nb)
 {
 	raw_notifier_chain_unregister(&xen_resume_notifier, nb);
 }
-EXPORT_SYMBOL_GPL(xen_resume_notifier_unregister);
+EXPORT_SYMBOL_GPL(xen_resume_notifier_unregister_hvm);
 
 #ifdef CONFIG_HIBERNATE_CALLBACKS
 static int xen_suspend(void *data)
@@ -71,7 +72,7 @@ static int xen_suspend(void *data)
 		return err;
 	}
 
-	gnttab_suspend();
+	gnttab_suspend_hvm();
 	xen_arch_pre_suspend();
 
 	/*
@@ -84,10 +85,10 @@ static int xen_suspend(void *data)
                                            : 0);
 
 	xen_arch_post_suspend(si->cancelled);
-	gnttab_resume();
+	gnttab_resume_hvm();
 
 	if (!si->cancelled) {
-		xen_irq_resume();
+		xen_irq_resume_hvm();
 		xen_timer_resume();
 	}
 
@@ -122,7 +123,7 @@ static void do_suspend(void)
 	}
 
 	printk(KERN_DEBUG "suspending xenstore...\n");
-	xs_suspend();
+	xs_suspend_hvm();
 
 	err = dpm_suspend_end(PMSG_FREEZE);
 	if (err) {
@@ -154,9 +155,9 @@ static void do_suspend(void)
 
 out_resume:
 	if (!si.cancelled)
-		xs_resume();
+		xs_resume_hvm();
 	else
-		xs_suspend_cancel();
+		xs_suspend_cancel_hvm();
 
 	dpm_resume_end(si.cancelled ? PMSG_THAW : PMSG_RESTORE);
 
@@ -227,14 +228,14 @@ static void shutdown_handler(struct xenbus_watch *watch,
 		return;
 
  again:
-	err = xenbus_transaction_start(&xbt);
+	err = xenbus_transaction_start_hvm(&xbt);
 	if (err)
 		return;
 
-	str = (char *)xenbus_read(xbt, "control", "shutdown", NULL);
+	str = (char *)xenbus_read_hvm(xbt, "control", "shutdown", NULL);
 	/* Ignore read errors and empty reads. */
 	if (XENBUS_IS_ERR_READ(str)) {
-		xenbus_transaction_end(xbt, 1);
+		xenbus_transaction_end_hvm(xbt, 1);
 		return;
 	}
 
@@ -245,9 +246,9 @@ static void shutdown_handler(struct xenbus_watch *watch,
 
 	/* Only acknowledge commands which we are prepared to handle. */
 	if (handler->cb)
-		xenbus_write(xbt, "control", "shutdown", "");
+		xenbus_write_hvm(xbt, "control", "shutdown", "");
 
-	err = xenbus_transaction_end(xbt, 0);
+	err = xenbus_transaction_end_hvm(xbt, 0);
 	if (err == -EAGAIN) {
 		kfree(str);
 		goto again;
@@ -272,19 +273,19 @@ static void sysrq_handler(struct xenbus_watch *watch, const char **vec,
 	int err;
 
  again:
-	err = xenbus_transaction_start(&xbt);
+	err = xenbus_transaction_start_hvm(&xbt);
 	if (err)
 		return;
-	if (!xenbus_scanf(xbt, "control", "sysrq", "%c", &sysrq_key)) {
+	if (!xenbus_scanf_hvm(xbt, "control", "sysrq", "%c", &sysrq_key)) {
 		pr_err("Unable to read sysrq code in control/sysrq\n");
-		xenbus_transaction_end(xbt, 1);
+		xenbus_transaction_end_hvm(xbt, 1);
 		return;
 	}
 
 	if (sysrq_key != '\0')
-		xenbus_printf(xbt, "control", "sysrq", "%c", '\0');
+		xenbus_printf_hvm(xbt, "control", "sysrq", "%c", '\0');
 
-	err = xenbus_transaction_end(xbt, 0);
+	err = xenbus_transaction_end_hvm(xbt, 0);
 	if (err == -EAGAIN)
 		goto again;
 
@@ -311,7 +312,7 @@ static int setup_shutdown_watcher(void)
 {
 	int err;
 
-	err = register_xenbus_watch(&shutdown_watch);
+	err = register_xenbus_watch_hvm(&shutdown_watch);
 	if (err) {
 		pr_err("Failed to set shutdown watcher\n");
 		return err;
@@ -319,7 +320,7 @@ static int setup_shutdown_watcher(void)
 
 
 #ifdef CONFIG_MAGIC_SYSRQ
-	err = register_xenbus_watch(&sysrq_watch);
+	err = register_xenbus_watch_hvm(&sysrq_watch);
 	if (err) {
 		pr_err("Failed to set sysrq watcher\n");
 		return err;
@@ -337,7 +338,7 @@ static int shutdown_event(struct notifier_block *notifier,
 	return NOTIFY_DONE;
 }
 
-int xen_setup_shutdown_event(void)
+int xen_setup_shutdown_event_hvm(void)
 {
 	static struct notifier_block xenstore_notifier = {
 		.notifier_call = shutdown_event
@@ -345,11 +346,11 @@ int xen_setup_shutdown_event(void)
 
 	if (!xen_domain())
 		return -ENODEV;
-	register_xenstore_notifier(&xenstore_notifier);
+	register_xenstore_notifier_hvm(&xenstore_notifier);
 	register_reboot_notifier(&xen_reboot_nb);
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(xen_setup_shutdown_event);
+EXPORT_SYMBOL_GPL(xen_setup_shutdown_event_hvm);
 
-subsys_initcall(xen_setup_shutdown_event);
+//subsys_initcall(xen_setup_shutdown_event);

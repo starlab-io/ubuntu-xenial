@@ -50,8 +50,8 @@
 #include <asm/pgtable.h>
 #include <asm/xen/hypervisor.h>
 #include <asm/hypervisor.h>
-#include <xen/xenbus.h>
-#include <xen/features.h>
+#include "xenbus.h"
+#include "../features.h"
 
 #include "xenbus_comms.h"
 #include "xenbus_probe.h"
@@ -73,14 +73,14 @@ static int backend_bus_id(char bus_id[XEN_BUS_ID_SIZE], const char *nodename)
 
 	devid = strrchr(nodename, '/') + 1;
 
-	err = xenbus_gather(XBT_NIL, nodename, "frontend-id", "%i", &domid,
+	err = xenbus_gather_hvm(XBT_NIL, nodename, "frontend-id", "%i", &domid,
 			    "frontend", NULL, &frontend,
 			    NULL);
 	if (err)
 		return err;
 	if (strlen(frontend) == 0)
 		err = -ERANGE;
-	if (!err && !xenbus_exists(XBT_NIL, frontend, ""))
+	if (!err && !xenbus_exists_hvm(XBT_NIL, frontend, ""))
 		err = -ENOENT;
 	kfree(frontend);
 
@@ -145,7 +145,7 @@ static int xenbus_probe_backend_unit(struct xen_bus_type *bus,
 
 	DPRINTK("%s\n", nodename);
 
-	err = xenbus_probe_node(bus, type, nodename);
+	err = xenbus_probe_node_hvm(bus, type, nodename);
 	kfree(nodename);
 	return err;
 }
@@ -165,7 +165,7 @@ static int xenbus_probe_backend(struct xen_bus_type *bus, const char *type,
 	if (!nodename)
 		return -ENOMEM;
 
-	dir = xenbus_directory(XBT_NIL, nodename, "", &dir_n);
+	dir = xenbus_directory_hvm(XBT_NIL, nodename, "", &dir_n);
 	if (IS_ERR(dir)) {
 		kfree(nodename);
 		return PTR_ERR(dir);
@@ -184,7 +184,7 @@ static int xenbus_probe_backend(struct xen_bus_type *bus, const char *type,
 static void frontend_changed(struct xenbus_watch *watch,
 			    const char **vec, unsigned int len)
 {
-	xenbus_otherend_changed(watch, vec, len, 0);
+	xenbus_otherend_changed_hvm(watch, vec, len, 0);
 }
 
 static struct xen_bus_type xenbus_backend = {
@@ -194,13 +194,13 @@ static struct xen_bus_type xenbus_backend = {
 	.probe = xenbus_probe_backend,
 	.otherend_changed = frontend_changed,
 	.bus = {
-		.name		= "xen-backend",
-		.match		= xenbus_match,
+		.name		= "xenblanket-backend",
+		.match		= xenbus_match_hvm,
 		.uevent		= xenbus_uevent_backend,
-		.probe		= xenbus_dev_probe,
-		.remove		= xenbus_dev_remove,
-		.shutdown	= xenbus_dev_shutdown,
-		.dev_groups	= xenbus_dev_groups,
+		.probe		= xenbus_dev_probe_hvm,
+		.remove		= xenbus_dev_remove_hvm,
+		.shutdown	= xenbus_dev_shutdown_hvm,
+		.dev_groups	= xenbus_dev_groups_hvm,
 	},
 };
 
@@ -209,7 +209,7 @@ static void backend_changed(struct xenbus_watch *watch,
 {
 	DPRINTK("");
 
-	xenbus_dev_changed(vec[XS_WATCH_PATH], &xenbus_backend);
+	xenbus_dev_changed_hvm(vec[XS_WATCH_PATH], &xenbus_backend);
 }
 
 static struct xenbus_watch be_watch = {
@@ -219,43 +219,43 @@ static struct xenbus_watch be_watch = {
 
 static int read_frontend_details(struct xenbus_device *xendev)
 {
-	return xenbus_read_otherend_details(xendev, "frontend-id", "frontend");
+	return xenbus_read_otherend_details_hvm(xendev, "frontend-id", "frontend");
 }
 
-int xenbus_dev_is_online(struct xenbus_device *dev)
+int xenbus_dev_is_online_hvm(struct xenbus_device *dev)
 {
 	int rc, val;
-
-	rc = xenbus_scanf(XBT_NIL, dev->nodename, "online", "%d", &val);
+    printk("XENBLANKET-DOM0: xenbus_dev_is_online_hvm %p %p.\n", dev, dev->nodename);
+	rc = xenbus_scanf_hvm(XBT_NIL, dev->nodename, "online", "%d", &val);
 	if (rc != 1)
 		val = 0; /* no online node present */
 
 	return val;
 }
-EXPORT_SYMBOL_GPL(xenbus_dev_is_online);
+EXPORT_SYMBOL_GPL(xenbus_dev_is_online_hvm);
 
-int __xenbus_register_backend(struct xenbus_driver *drv, struct module *owner,
+int __xenbus_register_backend_hvm(struct xenbus_driver *drv, struct module *owner,
 			      const char *mod_name)
 {
 	drv->read_otherend_details = read_frontend_details;
 
-	return xenbus_register_driver_common(drv, &xenbus_backend,
+	return xenbus_register_driver_common_hvm(drv, &xenbus_backend,
 					     owner, mod_name);
 }
-EXPORT_SYMBOL_GPL(__xenbus_register_backend);
+EXPORT_SYMBOL_GPL(__xenbus_register_backend_hvm);
 
 static int backend_probe_and_watch(struct notifier_block *notifier,
 				   unsigned long event,
 				   void *data)
 {
 	/* Enumerate devices in xenstore and watch for changes. */
-	xenbus_probe_devices(&xenbus_backend);
-	register_xenbus_watch(&be_watch);
+	xenbus_probe_devices_hvm(&xenbus_backend);
+	register_xenbus_watch_hvm(&be_watch);
 
 	return NOTIFY_DONE;
 }
 
-static int __init xenbus_probe_backend_init(void)
+static int __init xenbus_probe_backend_init_hvm(void)
 {
 	static struct notifier_block xenstore_notifier = {
 		.notifier_call = backend_probe_and_watch
@@ -263,14 +263,16 @@ static int __init xenbus_probe_backend_init(void)
 	int err;
 
 	DPRINTK("");
+        printk("XENBLANKET-DOM0: xenbus_probe_backend_init().\n");
 
 	/* Register ourselves with the kernel bus subsystem */
 	err = bus_register(&xenbus_backend.bus);
 	if (err)
 		return err;
 
-	register_xenstore_notifier(&xenstore_notifier);
+	register_xenstore_notifier_hvm(&xenstore_notifier);
 
 	return 0;
 }
-subsys_initcall(xenbus_probe_backend_init);
+
+//subsys_initcall(xenbus_probe_backend_init_hvm);

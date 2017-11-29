@@ -3,7 +3,7 @@
 #include <linux/export.h>
 #include <xen/page.h>
 
-bool xen_biovec_phys_mergeable(const struct bio_vec *vec1,
+bool xen_biovec_phys_mergeable_hvm(const struct bio_vec *vec1,
 			       const struct bio_vec *vec2)
 {
 #if XEN_PAGE_SIZE == PAGE_SIZE

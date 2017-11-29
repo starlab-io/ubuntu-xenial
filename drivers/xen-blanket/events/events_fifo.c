@@ -274,7 +274,7 @@ static void handle_irq_for_port(unsigned port)
 {
 	int irq;
 
-	irq = get_evtchn_to_irq(port);
+	irq = get_evtchn_to_irq_hvm(port);
 	if (irq != -1)
 		generic_handle_irq(irq);
 }
@@ -443,7 +443,7 @@ static struct notifier_block evtchn_fifo_cpu_notifier = {
 	.notifier_call	= evtchn_fifo_cpu_notification,
 };
 
-int __init xen_evtchn_fifo_init(void)
+int __init xen_evtchn_fifo_init_hvm(void)
 {
 	int cpu = get_cpu();
 	int ret;
@@ -454,7 +454,7 @@ int __init xen_evtchn_fifo_init(void)
 
 	pr_info("Using FIFO-based ABI\n");
 
-	evtchn_ops = &evtchn_ops_fifo;
+	evtchn_ops_hvm = &evtchn_ops_fifo;
 
 	register_cpu_notifier(&evtchn_fifo_cpu_notifier);
 out:

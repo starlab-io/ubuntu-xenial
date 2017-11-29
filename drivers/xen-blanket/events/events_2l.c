@@ -17,7 +17,7 @@
 
 #include <xen/xen.h>
 #include <xen/xen-ops.h>
-#include <xen/events.h>
+#include "../events.h"
 #include <xen/interface/xen.h>
 #include <xen/interface/event_channel.h>
 
@@ -90,7 +90,7 @@ static void evtchn_2l_unmask(unsigned port)
 
 	BUG_ON(!irqs_disabled());
 
-	if (unlikely((cpu != cpu_from_evtchn(port))))
+	if (unlikely((cpu != cpu_from_evtchn_hvm(port))))
 		do_hypercall = 1;
 	else {
 		/*
@@ -170,9 +170,9 @@ static void evtchn_2l_handle_events(unsigned cpu)
 	struct vcpu_info *vcpu_info = __this_cpu_read(xen_vcpu);
 
 	/* Timer interrupt has highest priority. */
-	irq = irq_from_virq(cpu, VIRQ_TIMER);
+	irq = irq_from_virq_hvm(cpu, VIRQ_TIMER);
 	if (irq != -1) {
-		unsigned int evtchn = evtchn_from_irq(irq);
+		unsigned int evtchn = evtchn_from_irq_hvm(irq);
 		word_idx = evtchn / BITS_PER_LONG;
 		bit_idx = evtchn % BITS_PER_LONG;
 		if (active_evtchns(cpu, s, word_idx) & (1ULL << bit_idx))
@@ -239,7 +239,7 @@ static void evtchn_2l_handle_events(unsigned cpu)
 
 			/* Process port. */
 			port = (word_idx * BITS_PER_EVTCHN_WORD) + bit_idx;
-			irq = get_evtchn_to_irq(port);
+			irq = get_evtchn_to_irq_hvm(port);
 
 			if (irq != -1)
 				generic_handle_irq(irq);
@@ -261,7 +261,7 @@ static void evtchn_2l_handle_events(unsigned cpu)
 	}
 }
 
-irqreturn_t xen_debug_interrupt(int irq, void *dev_id)
+irqreturn_t xen_debug_interrupt_hvm(int irq, void *dev_id)
 {
 	struct shared_info *sh = HYPERVISOR_shared_info;
 	int cpu = smp_processor_id();
@@ -329,8 +329,8 @@ irqreturn_t xen_debug_interrupt(int irq, void *dev_id)
 		if (sync_test_bit(i, BM(sh->evtchn_pending))) {
 			int word_idx = i / BITS_PER_EVTCHN_WORD;
 			printk("  %d: event %d -> irq %d%s%s%s\n",
-			       cpu_from_evtchn(i), i,
-			       get_evtchn_to_irq(i),
+			       cpu_from_evtchn_hvm(i), i,
+			       get_evtchn_to_irq_hvm(i),
 			       sync_test_bit(word_idx, BM(&v->evtchn_pending_sel))
 			       ? "" : " l2-clear",
 			       !sync_test_bit(i, BM(sh->evtchn_mask))
@@ -368,8 +368,8 @@ static const struct evtchn_ops evtchn_ops_2l = {
 	.resume	           = evtchn_2l_resume,
 };
 
-void __init xen_evtchn_2l_init(void)
+void __init xen_evtchn_2l_init_hvm(void)
 {
 	pr_info("Using 2-level ABI\n");
-	evtchn_ops = &evtchn_ops_2l;
+	evtchn_ops_hvm = &evtchn_ops_2l;
 }
